@@ -1,0 +1,41 @@
+controller:
+  service:
+    type: NodePort
+    port: 8080
+    nodePort: 32000
+  JCasC:
+    configScripts:
+      kubernetes-cloud: |
+        jenkins:
+          clouds:
+          - kubernetes:
+              name: "kubernetes"
+              # The Jenkins URL needs to be accessible from the k8s cluster
+              # Using the service name is the most reliable way
+              serverUrl: "http://jenkins.blue-green-demo.svc.cluster.local:8080"
+              namespace: "blue-green-demo"
+              jenkinsUrl: "http://jenkins.blue-green-demo.svc.cluster.local:8080"
+              # Define a pod template for our agents
+              templates:
+              - name: "default-agent"
+                label: "default-agent"
+                containers:
+                - name: "jnlp"
+                  image: "jenkins/inbound-agent:latest"
+                  workingDir: "/home/jenkins/agent"
+                  args: '${computer.jnlpmac} ${computer.name}'
+  # Install necessary plugins
+  installPlugins:
+    - kubernetes
+    - workflow-aggregator
+    - git
+    - pipeline-utility-steps
+# RBAC for Jenkins to manage resources in its namespace
+rbac:
+  create: true
+  # Give it a ClusterRole to be able to discover cluster info
+  # In a real production setup, this would be scoped down.
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "pods/exec", "pods/log", "namespaces", "services", "deployments", "secrets"]
+      verbs: ["*"]

@@ -1,0 +1,116 @@
+pipeline {
+    agent {
+        kubernetes {
+            cloud 'kubernetes'
+            namespace 'blue-green-demo'
+            yamlFile 'jenkins_config/pod-template.yaml' // A simple pod template is defined in the repo
+        }
+    }
+
+    environment {
+        // Use the commit hash for a unique image tag
+        IMAGE_TAG = "blue-green-app:${env.GIT_COMMIT.take(7)}"
+        K8S_NAMESPACE = "blue-green-demo"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                container('docker') {
+                    script {
+                        // We use Minikube's docker daemon, so no push is needed.
+                        sh 'docker build -t ${IMAGE_TAG} ./app'
+                    }
+                }
+            }
+        }
+
+        stage('Determine Deployment Color') {
+            steps {
+                script {
+                    // Check if the 'blue' deployment exists. If not, this is our first run.
+                    def blueDeploymentExists = sh(
+                        script: "kubectl get deployment node-app-blue -n ${K8S_NAMESPACE} --ignore-not-found -o name",
+                        returnStatus: true
+                    ) == 0
+
+                    if (!blueDeploymentExists) {
+                        // First time deployment is BLUE
+                        env.DEPLOY_COLOR = "blue"
+                        env.ACTIVE_COLOR = "blue"
+                        env.PREVIEW_COLOR = "green" // Preview will target the next color
+                    } else {
+                        // Subsequent deployments are GREEN
+                        env.DEPLOY_COLOR = "green"
+                        env.ACTIVE_COLOR = "blue"
+                        env.PREVIEW_COLOR = "green"
+                    }
+                    echo "Deploying new version to: ${env.DEPLOY_COLOR}"
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    // Apply the deployment manifest for the target color
+                    sh "sed -i 's|image: blue-green-app:latest|image: ${IMAGE_TAG}|g' k8s/deployment-${env.DEPLOY_COLOR}.yaml"
+                    sh "kubectl apply -f k8s/deployment-${env.DEPLOY_COLOR}.yaml -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/service-active.yaml -n ${K8S_NAMESPACE}"
+                    sh "kubectl apply -f k8s/service-preview.yaml -n ${K8S_NAMESPACE}"
+                }
+            }
+        }
+
+        stage('Manual Approval: Verify Green') {
+            // This stage only runs if we are deploying a new (green) version
+            when {
+                expression { env.DEPLOY_COLOR == 'green' }
+            }
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    input message: "New version deployed to GREEN. Please verify on the 'preview-service' URL. Proceed to switch traffic?"
+                }
+            }
+        }
+
+        stage('Switch Traffic to Green') {
+            when {
+                expression { env.DEPLOY_COLOR == 'green' }
+            }
+            steps {
+                script {
+                    echo "Switching active-service to point to GREEN deployment"
+                    // The magic happens here: we patch the service to change its selector
+                    sh "kubectl patch service active-service -n ${K8S_NAMESPACE} -p '{\"spec\": {\"selector\": {\"app\": \"node-app-green\"}}}'"
+                }
+            }
+        }
+
+        stage('Cleanup Old Blue Deployment') {
+            when {
+                expression { env.DEPLOY_COLOR == 'green' }
+            }
+            steps {
+                script {
+                    echo "Cleaning up old BLUE deployment"
+                    sh "kubectl delete deployment node-app-blue -n ${K8S_NAMESPACE} --ignore-not-found"
+                }
+            }
+        }
+    }
+    post {
+        always {
+            // This is just to demonstrate a full cycle. In a real scenario,
+            // you might want to rename green to blue to prepare for the next run.
+            // For simplicity, we just clean up.
+            echo "Pipeline finished."
+        }
+    }
+}
