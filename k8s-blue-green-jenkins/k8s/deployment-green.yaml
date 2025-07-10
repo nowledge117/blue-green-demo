@@ -18,6 +18,6 @@ spec:
       - name: node-app
         # This image will be replaced by the Jenkins pipeline
         image: blue-green-app:latest
-        imagePullPolicy: IfNotPresent # Important for minikube local images
+        imagePullPolicy: IfNotPresent 
         ports:
         - containerPort: 3000

@@ -6,7 +6,7 @@ controller:
     create: true
     name: "jenkins"
     annotations:
-      eks.amazonaws.com/role-arn: "{{JENKINS_IAM_ROLE_ARN}}"
+      eks.amazonaws.com/role-arn: "arn:aws:iam::812073017047:role/jenkins-irsa-role"
   JCasC:
     configScripts:
       kubernetes-cloud: |
